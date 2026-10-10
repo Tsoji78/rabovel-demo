@@ -1,26 +1,46 @@
 "use client";
 
-import { useState } from "react";
-import { Building2, RefreshCw, ShieldCheck, WalletCards } from "lucide-react";
+import { useMemo, useState } from "react";
+import Link from "next/link";
+import { Building2, RefreshCw, Search, ShieldCheck, WalletCards } from "lucide-react";
 import { PageContainer } from "@/components/layout/page-container";
+import { DataTable, type DataTableColumn } from "@/components/shared/data-table";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { PageHeader } from "@/components/shared/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
 import { InvestorQuoteDialog } from "@/features/assets/components/investor-quote-dialog";
-import { useInvestorCatalog } from "@/features/assets/hooks/use-assets";
-import type { InvestorCatalogAsset } from "@/types";
+import { useAssets, useInvestorCatalog } from "@/features/assets/hooks/use-assets";
+import { formatPrice } from "@/lib/formatters";
+import type { Asset, InvestorCatalogAsset } from "@/types";
 
+/** Assets are the instrument catalog: NGX-listed and issuer-minted alike. */
 export default function AssetsMarketplacePage() {
-  const { data, isPending, isError, refetch } = useInvestorCatalog();
-  return <PageContainer><PageHeader title="Live assets" description="Chain-verified simulated assets with your current wallet balances." actions={<Button variant="outline" onClick={() => void refetch()}><RefreshCw />Refresh balances</Button>} /><div className="space-y-6">
-    {isError ? <ErrorState onRetry={() => refetch()} /> : isPending ? <div className="grid gap-5 sm:grid-cols-2"><Skeleton className="h-44" /><Skeleton className="h-72" /></div> : <>
-      <Card><CardHeader><div className="flex items-start justify-between gap-3"><div><CardTitle className="flex items-center gap-2"><WalletCards className="size-5" />Purchase readiness</CardTitle><CardDescription>Live payment balance for your linked Phantom wallet.</CardDescription></div><Badge variant={data?.cngn.ready ? "success" : "warning"}>{data?.cngn.ready ? "cNGN ready" : "cNGN not ready"}</Badge></div></CardHeader><CardContent className="grid gap-3 text-sm sm:grid-cols-2"><Value label="Wallet" value={data?.wallet_address ?? "Unavailable"} mono /><Value label="cNGN balance" value={formatTokenBalance(data?.cngn.balance_base_units, data?.cngn.decimals)} /><Value label="cNGN token account" value={data?.cngn.token_account ?? "Create and fund this account from Wallet & Custody"} mono /><Value label="Network" value={data?.cngn.network ?? "Unavailable"} /></CardContent></Card>
-      {!data?.assets.length ? <EmptyState icon={Building2} title="No issued assets are ready" description="An asset appears only after mint setup and initial inventory issuance are confirmed on-chain." /> : <div className="grid gap-5 lg:grid-cols-2">{data.assets.map((asset) => <LiveAssetCard key={asset.asset_id} asset={asset} paymentReady={Boolean(data.cngn.ready && data.cngn.balance_base_units !== "0")} paymentDecimals={data.cngn.decimals ?? 6} />)}</div>}
-    </>}
+  const assets = useAssets();
+  // Needs a linked wallet; the catalog below renders without it.
+  const catalog = useInvestorCatalog();
+  const [query, setQuery] = useState("");
+  const rows = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return (assets.data ?? []).filter((asset) => !needle || asset.symbol.toLowerCase().includes(needle) || asset.name.toLowerCase().includes(needle));
+  }, [assets.data, query]);
+  const onChain = catalog.data?.assets ?? [];
+
+  const columns: DataTableColumn<Asset>[] = [
+    { accessorKey: "symbol", header: "Asset", cell: ({ row }) => <Link href={`/assets/${encodeURIComponent(row.original.assetId)}`} className="hover:underline"><p className="font-medium text-foreground">{row.original.symbol}</p><p className="text-xs text-muted-foreground">{row.original.name}</p></Link> },
+    { id: "source", header: "Source", cell: ({ row }) => row.original.origin === "issuer" ? <Badge variant="outline">Issuer listing</Badge> : <Badge variant="secondary">NGX-listed</Badge> },
+    { accessorKey: "marketPrice", header: "Price (NGN)", cell: ({ row }) => <span className="font-tabular">{row.original.marketPrice ? formatPrice(row.original.marketPrice) : "—"}</span> },
+    { id: "mint", header: "Token", cell: ({ row }) => row.original.contractAddress ? <span className="font-mono text-xs" title={row.original.contractAddress}>{row.original.contractAddress.slice(0, 4)}…{row.original.contractAddress.slice(-4)}</span> : <Badge variant="success">Minted · simulated</Badge> },
+    { id: "actions", header: "", cell: ({ row }) => row.original.marketId ? <Link href={`/trade?market=${row.original.marketId}`} className="px-2 text-sm font-medium text-primary hover:underline">Trade</Link> : null },
+  ];
+
+  return <PageContainer><PageHeader title="Assets" description="Every minted, tradable asset in one catalog: NGX-listed instruments and issuer listings, matched by the Rabovel engine. Prices are simulated." actions={<Button variant="outline" onClick={() => { void assets.refetch(); void catalog.refetch(); }}><RefreshCw />Refresh</Button>} /><div className="space-y-6">
+    {catalog.data && <Card><CardHeader><div className="flex items-start justify-between gap-3"><div><CardTitle className="flex items-center gap-2"><WalletCards className="size-5" />Purchase readiness</CardTitle><CardDescription>Live payment balance for your linked Phantom wallet.</CardDescription></div><Badge variant={catalog.data.cngn.ready ? "success" : "warning"}>{catalog.data.cngn.ready ? "cNGN ready" : "cNGN not ready"}</Badge></div></CardHeader><CardContent className="grid gap-3 text-sm sm:grid-cols-2"><Value label="Wallet" value={catalog.data.wallet_address} mono /><Value label="cNGN balance" value={formatTokenBalance(catalog.data.cngn.balance_base_units, catalog.data.cngn.decimals)} /><Value label="cNGN token account" value={catalog.data.cngn.token_account ?? "Create and fund this account from Wallet & Custody"} mono /><Value label="Network" value={catalog.data.cngn.network} /></CardContent></Card>}
+    {onChain.length > 0 && <div className="space-y-3"><h2 className="text-lg font-semibold">Buy issuer assets on-chain</h2><div className="grid gap-5 lg:grid-cols-2">{onChain.map((asset) => <LiveAssetCard key={asset.asset_id} asset={asset} paymentReady={Boolean(catalog.data?.cngn.ready && catalog.data.cngn.balance_base_units !== "0")} paymentDecimals={catalog.data?.cngn.decimals ?? 6} />)}</div></div>}
+    {assets.isError ? <ErrorState onRetry={() => assets.refetch()} /> : <Card><CardHeader><div className="flex flex-wrap items-center justify-between gap-3"><div><CardTitle>All assets</CardTitle><CardDescription>{assets.data ? `${assets.data.length} minted, tradable assets` : "Loading catalog…"}</CardDescription></div><div className="relative w-full sm:w-64"><Search className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search ticker or name" className="pl-8" aria-label="Search assets" /></div></div></CardHeader><CardContent><DataTable columns={columns} data={rows} isLoading={assets.isPending} emptyState={<EmptyState icon={Building2} title="No matching assets" description="Try another ticker or name." />} /></CardContent></Card>}
   </div></PageContainer>;
 }
 
